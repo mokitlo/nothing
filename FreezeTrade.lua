@@ -1,3 +1,13 @@
+--!strict
+-- MM2 MENU — UI ONLY
+-- Адаптировано под телефон:
+--   • компактный автоматический размер;
+--   • кнопки нажимаются мышью и касанием;
+--   • окно перетаскивается за верхнюю часть;
+--   • размер меняется за правый нижний угол.
+--
+-- Внутри нет функций трейда, автоматического принятия или вмешательства в игру.
+-- Для Roblox Studio: помести как LocalScript в StarterPlayer > StarterPlayerScripts.
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -203,14 +213,17 @@ local function createToggleRow(order: number, rowName: string, symbol: string)
 	card.Parent = content
 	corner(card, 23)
 
+	-- Небольшое сжатие всей ячейки при нажатии.
 	local cardScale = Instance.new("UIScale")
 	cardScale.Name = "PressScale"
 	cardScale.Scale = 1
 	cardScale.Parent = card
 
+	-- Обычная слабая обводка становится яркой, когда пункт включен.
 	local cardStroke = stroke(card, 2, 0.34, COLORS.Blue)
 	gradient(cardStroke, COLORS.Blue, COLORS.Purple, 0)
 
+	-- Невидимая кнопка делает кликабельной всю свободную область ячейки.
 	local clickArea = Instance.new("TextButton")
 	clickArea.Name = "ClickArea"
 	clickArea.Size = UDim2.fromScale(1, 1)
@@ -384,6 +397,7 @@ local function createToggleRow(order: number, rowName: string, symbol: string)
 			}
 		):Play()
 
+		-- Постоянная яркая обводка включенной ячейки.
 		TweenService:Create(
 			cardStroke,
 			TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
@@ -418,6 +432,7 @@ local function createToggleRow(order: number, rowName: string, symbol: string)
 		renderState()
 	end
 
+	-- Эффект работает и при нажатии на всю ячейку, и на сам переключатель.
 	for _, button in { clickArea, toggle } do
 		button.MouseButton1Down:Connect(playPressEffect)
 		button.MouseButton1Up:Connect(playReleaseEffect)
@@ -460,6 +475,8 @@ resizeHandle.Name = "ResizeHandle"
 resizeHandle.AnchorPoint = Vector2.new(1, 1)
 resizeHandle.Position = UDim2.new(1, -12, 1, -12)
 resizeHandle.Size = UDim2.fromOffset(42, 42)
+-- Невидимая область изменения размера.
+-- Она не отображается, но остается кликабельной мышью и пальцем.
 resizeHandle.BackgroundTransparency = 1
 resizeHandle.BorderSizePixel = 0
 resizeHandle.AutoButtonColor = false
@@ -502,6 +519,7 @@ task.spawn(function()
 	end
 end)
 
+-- Сворачивание
 local minimized = false
 local normalHeight = BASE_HEIGHT
 local compactHeight = 128
@@ -523,6 +541,7 @@ minimize.Activated:Connect(function()
 	):Play()
 end)
 
+-- Перетаскивание окна мышью и пальцем
 local dragging = false
 local dragInput: InputObject? = nil
 local dragStart = Vector2.zero
@@ -559,6 +578,7 @@ header.InputChanged:Connect(function(input: InputObject)
 	end
 end)
 
+-- Изменение размера за правый нижний угол
 local resizing = false
 local resizeInput: InputObject? = nil
 local resizeStart = Vector2.zero
@@ -604,4 +624,3 @@ UserInputService.InputEnded:Connect(function(input: InputObject)
 		dragInput = nil
 	end
 end)
-
