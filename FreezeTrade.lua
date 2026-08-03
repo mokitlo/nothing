@@ -4,7 +4,7 @@
 --   • компактный автоматический размер;
 --   • кнопки нажимаются мышью и касанием;
 --   • окно перетаскивается за верхнюю часть;
---   • размер меняется за правый нижний угол.
+--   • размер автоматически подбирается отдельно для телефона и ПК.
 --
 -- Внутри нет функций трейда, автоматического принятия или вмешательства в игру.
 -- Для Roblox Studio: помести как LocalScript в StarterPlayer > StarterPlayerScripts.
@@ -15,6 +15,7 @@ local TweenService = game:GetService("TweenService")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
+local isMobile = UserInputService.TouchEnabled and not UserInputService.MouseEnabled
 
 local OLD_NAME = "MM2ResponsiveMenu"
 local oldGui = playerGui:FindFirstChild(OLD_NAME)
@@ -24,8 +25,11 @@ end
 
 local BASE_WIDTH = 500
 local BASE_HEIGHT = 610
-local MIN_SCALE = 0.42
-local MAX_SCALE = 1.10
+
+-- Размеры взяты из h.txt: компактный вариант для телефона и немного крупнее для ПК.
+local TARGET_WIDTH = isMobile and 300 or 340
+local TARGET_HEIGHT = isMobile and 370 or 400
+local MIN_AUTO_SCALE = 0.35
 
 local COLORS = {
 	Panel = Color3.fromRGB(5, 8, 18),
@@ -174,9 +178,24 @@ minimize.Text = "−"
 minimize.TextColor3 = Color3.fromRGB(192, 207, 255)
 minimize.TextSize = 25
 minimize.Font = Enum.Font.GothamBold
+minimize.ZIndex = 11
 minimize.Parent = header
 corner(minimize, 14)
 stroke(minimize, 2, 0.18, COLORS.Purple)
+
+-- Отдельная зона перетаскивания не перекрывает кнопку сворачивания.
+local dragArea = Instance.new("TextButton")
+dragArea.Name = "DragArea"
+dragArea.Position = UDim2.fromOffset(0, 0)
+dragArea.Size = UDim2.new(1, -64, 0, 100)
+dragArea.BackgroundTransparency = 1
+dragArea.BorderSizePixel = 0
+dragArea.AutoButtonColor = false
+dragArea.Text = ""
+dragArea.Active = true
+dragArea.Selectable = false
+dragArea.ZIndex = 10
+dragArea.Parent = header
 
 local divider = Instance.new("Frame")
 divider.Position = UDim2.fromOffset(0, 100)
@@ -470,22 +489,6 @@ footer.Font = Enum.Font.GothamBold
 footer.Parent = main
 gradient(footer, COLORS.Blue, COLORS.Purple, 0)
 
-local resizeHandle = Instance.new("TextButton")
-resizeHandle.Name = "ResizeHandle"
-resizeHandle.AnchorPoint = Vector2.new(1, 1)
-resizeHandle.Position = UDim2.new(1, -12, 1, -12)
-resizeHandle.Size = UDim2.fromOffset(42, 42)
--- Невидимая область изменения размера.
--- Она не отображается, но остается кликабельной мышью и пальцем.
-resizeHandle.BackgroundTransparency = 1
-resizeHandle.BorderSizePixel = 0
-resizeHandle.AutoButtonColor = false
-resizeHandle.Text = ""
-resizeHandle.TextTransparency = 1
-resizeHandle.Active = true
-resizeHandle.Selectable = false
-resizeHandle.Parent = main
-
 local function viewportSize(): Vector2
 	local camera = workspace.CurrentCamera
 	if camera then
@@ -496,28 +499,37 @@ end
 
 local function fittedScale(): number
 	local viewport = viewportSize()
-	local widthScale = (viewport.X * 0.86) / BASE_WIDTH
-	local heightScale = (viewport.Y * 0.84) / BASE_HEIGHT
-	return math.clamp(math.min(widthScale, heightScale, 0.90), MIN_SCALE, MAX_SCALE)
+	local preferredScale = math.min(TARGET_WIDTH / BASE_WIDTH, TARGET_HEIGHT / BASE_HEIGHT)
+	local viewportScale = math.min(
+		(viewport.X * 0.92) / BASE_WIDTH,
+		(viewport.Y * 0.90) / BASE_HEIGHT
+	)
+
+	return math.max(math.min(preferredScale, viewportScale), MIN_AUTO_SCALE)
 end
 
-uiScale.Scale = fittedScale()
+local cameraViewportConnection: RBXScriptConnection? = nil
 
-local lastViewport = viewportSize()
-workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+local function applyFittedScale()
 	uiScale.Scale = fittedScale()
-end)
+end
 
-task.spawn(function()
-	while gui.Parent do
-		task.wait(0.5)
-		local current = viewportSize()
-		if current ~= lastViewport then
-			lastViewport = current
-			uiScale.Scale = math.min(uiScale.Scale, fittedScale())
-		end
+local function bindCurrentCamera()
+	if cameraViewportConnection then
+		cameraViewportConnection:Disconnect()
+		cameraViewportConnection = nil
 	end
-end)
+
+	local camera = workspace.CurrentCamera
+	if camera then
+		cameraViewportConnection = camera:GetPropertyChangedSignal("ViewportSize"):Connect(applyFittedScale)
+	end
+
+	applyFittedScale()
+end
+
+workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(bindCurrentCamera)
+bindCurrentCamera()
 
 -- Сворачивание
 local minimized = false
@@ -530,7 +542,6 @@ minimize.Activated:Connect(function()
 
 	content.Visible = not minimized
 	footer.Visible = not minimized
-	resizeHandle.Visible = not minimized
 
 	TweenService:Create(
 		main,
@@ -541,14 +552,21 @@ minimize.Activated:Connect(function()
 	):Play()
 end)
 
--- Перетаскивание окна мышью и пальцем
+-- Перетаскивание окна мышью и пальцем.
+-- Состояние принудительно сбрасывается при отпускании, отмене ввода
+-- и потере фокуса, поэтому меню больше не "прилипает" к курсору.
 local dragging = false
-local dragInput: InputObject? = nil
+local activeDragInput: InputObject? = nil
 local dragStart = Vector2.zero
 local startPosition = main.Position
 
-local function updateDrag(input: InputObject)
-	local delta = input.Position - dragStart
+local function stopDragging()
+	dragging = false
+	activeDragInput = nil
+end
+
+local function updateDrag(pointerPosition: Vector2)
+	local delta = pointerPosition - dragStart
 	local scale = math.max(uiScale.Scale, 0.01)
 
 	main.Position = UDim2.new(
@@ -559,68 +577,48 @@ local function updateDrag(input: InputObject)
 	)
 end
 
-header.InputBegan:Connect(function(input: InputObject)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.Touch
+dragArea.InputBegan:Connect(function(input: InputObject)
+	if input.UserInputType ~= Enum.UserInputType.MouseButton1
+		and input.UserInputType ~= Enum.UserInputType.Touch
 	then
-		dragging = true
-		dragStart = input.Position
-		startPosition = main.Position
-		dragInput = input
+		return
 	end
-end)
 
-header.InputChanged:Connect(function(input: InputObject)
-	if input.UserInputType == Enum.UserInputType.MouseMovement
-		or input.UserInputType == Enum.UserInputType.Touch
-	then
-		dragInput = input
-	end
-end)
+	dragging = true
+	activeDragInput = input
+	dragStart = input.Position
+	startPosition = main.Position
 
--- Изменение размера за правый нижний угол
-local resizing = false
-local resizeInput: InputObject? = nil
-local resizeStart = Vector2.zero
-local resizeStartScale = uiScale.Scale
-
-resizeHandle.InputBegan:Connect(function(input: InputObject)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.Touch
-	then
-		resizing = true
-		resizeStart = input.Position
-		resizeStartScale = uiScale.Scale
-		resizeInput = input
-	end
-end)
-
-resizeHandle.InputChanged:Connect(function(input: InputObject)
-	if input.UserInputType == Enum.UserInputType.MouseMovement
-		or input.UserInputType == Enum.UserInputType.Touch
-	then
-		resizeInput = input
-	end
+	input.Changed:Connect(function()
+		if activeDragInput == input
+			and (input.UserInputState == Enum.UserInputState.End
+				or input.UserInputState == Enum.UserInputState.Cancel)
+		then
+			stopDragging()
+		end
+	end)
 end)
 
 UserInputService.InputChanged:Connect(function(input: InputObject)
-	if resizing and input == resizeInput then
-		local delta = input.Position - resizeStart
-		local deltaScale = math.max(delta.X / BASE_WIDTH, delta.Y / BASE_HEIGHT)
-		uiScale.Scale = math.clamp(resizeStartScale + deltaScale, MIN_SCALE, MAX_SCALE)
-	elseif dragging and input == dragInput then
-		updateDrag(input)
+	if not dragging or not activeDragInput then
+		return
+	end
+
+	if activeDragInput.UserInputType == Enum.UserInputType.Touch then
+		if input == activeDragInput then
+			updateDrag(input.Position)
+		end
+	elseif input.UserInputType == Enum.UserInputType.MouseMovement then
+		updateDrag(input.Position)
 	end
 end)
 
 UserInputService.InputEnded:Connect(function(input: InputObject)
-	if input == resizeInput then
-		resizing = false
-		resizeInput = nil
-	end
-
-	if input == dragInput then
-		dragging = false
-		dragInput = nil
+	if input == activeDragInput
+		or (dragging and input.UserInputType == Enum.UserInputType.MouseButton1)
+	then
+		stopDragging()
 	end
 end)
+
+UserInputService.WindowFocusReleased:Connect(stopDragging)
